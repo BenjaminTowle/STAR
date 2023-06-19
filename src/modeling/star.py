@@ -1,7 +1,7 @@
 import torch
 
 from torch.nn import CrossEntropyLoss
-from transformers import T5ForConditionalGeneration, T5TokenizerFast, T5Config
+from transformers import T5ForConditionalGeneration, T5Config
 from transformers.modeling_outputs import Seq2SeqLMOutput, BaseModelOutput
 from typing import Optional, Tuple, Union
 

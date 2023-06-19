@@ -1,21 +1,16 @@
-import jsonlines
 import torch
 
 from abc import ABC, abstractmethod
 from datasets import Dataset
 from typing import List, Optional, Union
 from transformers import (
-    pipeline, 
-    FeatureExtractionPipeline, 
     T5ForConditionalGeneration, 
     T5TokenizerFast,
     PreTrainedTokenizerBase,
-    PreTrainedModel,
 )
 
 from ..agents.index import Index
 from ..modeling.matching import MatchingMixin
-from ..timer import timer
 from ..utils import RegistryMixin
 from .agent_utils import AgentBatchOutput
 from .diversity import DiversityStrategy
@@ -90,8 +85,6 @@ class RetrievalAgent(Agent):
     def batch_act(self, queries: List[str]):
 
         # Generate initial outputs for reranking
-        
-
         query_embed = self.get_embedding(queries)
 
         if self.use_posterior:
@@ -153,8 +146,6 @@ class Seq2SeqAgent(Agent):
 
         texts = [self.tokenizer.batch_decode(output, skip_special_tokens=True) for output in outputs]
 
-
-
         return AgentBatchOutput(docs=texts)
 
 @Agent.register_subclass("star")
@@ -174,11 +165,6 @@ class STARAgent(Agent):
         self.device = device
         self.k = k
 
-        # Fill id2reply with dummy tokens for each id in the tokenizer
-        #for i in range(tokenizer.vocab_size):
-            #if i not in id2reply:
-                #id2reply[i] = "I am fine thanks" #tokenizer.decode([i])
-
         # Define function to restrict decoding vocabulary to replies
         INT_TOKEN_IDS = list(id2reply.keys())
         INT_TOKEN_IDS.append(tokenizer.eos_token_id)
@@ -191,7 +177,7 @@ class STARAgent(Agent):
     @torch.no_grad()
     def batch_act(self, queries: List[str]):
        
-        queries = ["message: " + query for query in queries]
+        queries = ["message: " + query.replace("[SEP]", "") for query in queries]
         inputs = self.tokenizer(
             queries,
             return_tensors="pt",

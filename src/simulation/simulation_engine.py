@@ -1,5 +1,4 @@
 # An engine to coordinate entire simulation process
-# TODO: Rewrite simulation engine to deal with message, reply pairs, rather than entire dialogues.
 import logging
 import jsonlines
 import re

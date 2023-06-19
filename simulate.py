@@ -6,10 +6,7 @@ import torch
 
 from datasets import set_caching_enabled, Dataset
 from dataclasses import dataclass, field
-from torch import nn
 from transformers import (
-    HfArgumentParser, 
-    pipeline,
     T5ForConditionalGeneration,
     T5TokenizerFast,
     AutoTokenizer,
@@ -20,6 +17,7 @@ from src.agents.diversity import DiversityStrategy, DiversityConfig
 from src.agents.index import Index
 from src.corpora import Corpus
 from src.modeling.mcvae import DistilBertMCVAE
+from src.modeling.star import STARModel
 from src.simulation.env import SmartReplyEnv
 from src.simulation.simulation_engine import SimulationEngine
 from src.timer import timer
@@ -72,7 +70,7 @@ class Args:
     )
 
     json_write_path: str = field(
-        default="prefix_personachat_star.jsonl",
+        default=None,
         metadata={"help": "Path to write json file."}
     )
 
@@ -208,6 +206,7 @@ def build_retrieval_agent(args):
 
     return agent
 
+
 def build_seq2seq_agent(args):
     model = T5ForConditionalGeneration.from_pretrained(args.model_path)
     tokenizer = T5TokenizerFast.from_pretrained("t5-small")
@@ -218,7 +217,7 @@ def build_seq2seq_agent(args):
 
     return agent
 
-from src.modeling.star import STARModel
+
 def build_star_agent(args):
     tokenizer = T5TokenizerFast.from_pretrained("t5-small")
     model = STARModel.from_pretrained(args.model_path, num_masked_tokens=len(tokenizer))

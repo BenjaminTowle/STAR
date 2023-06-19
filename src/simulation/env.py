@@ -1,6 +1,6 @@
 from typing import List
 
-from eval import rouge_single
+from .metrics import rouge_single
 
 
 class SmartReplyEnv:

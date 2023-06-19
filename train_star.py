@@ -22,7 +22,7 @@ from statistics import mean
 
 
 from src.utils import set_random_seed, parse_args
-from eval import rouge, self_rouge
+from src.simulation.metrics import rouge, self_rouge
 
 os.environ["WANDB_DISABLED"] = "true"
 set_caching_enabled(False)

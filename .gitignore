@@ -1,7 +1,3 @@
-barchart.py
-ignore
-test.py
-eval.py
-process_hit.py
-validate_hit.py
-check_version.py
+__pycache__/
+ignore/
+

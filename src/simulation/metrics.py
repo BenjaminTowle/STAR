@@ -108,7 +108,6 @@ class RougeMetric(Metric):
         else:
             return 0.
 
-
 @Metric.register_subclass("rouge_2")
 class RougeMetric(Metric):
 
@@ -129,49 +128,11 @@ class RougeMetric(Metric):
         else:
             return 0.
 
-
-"""
-@Metric.register_subclass("CTR")
-class CTRMetric(Metric):
-
-    def _update(self, metric_input: MetricInput):
-        return max(metric_input.reward)
-
-@Metric.register_subclass("CTR_1")
-class CTRMetric(Metric):
-
-    def _update(self, metric_input: MetricInput):
-        return metric_input.reward[0]
-
-@Metric.register_subclass("CTR_2")
-class CTRMetric(Metric):
-
-    def _update(self, metric_input: MetricInput):
-        return metric_input.reward[1]
-
-@Metric.register_subclass("CTR_3")
-class CTRMetric(Metric):
-
-    def _update(self, metric_input: MetricInput):
-        return metric_input.reward[2]"""
-
-@Metric.register_subclass("MRR")
-class MRRMetric(Metric):
-
-    def _update(self, metric_input: MetricInput):
-        return 1 / (np.argmax(np.array(metric_input.reward)) + 1) if max(metric_input.reward) > 0 else 0.
-
 @Metric.register_subclass("self-rouge")
 class SelfRougeMetric(Metric):
 
     def _update(self, metric_input: MetricInput):
         return mean(self_rouge([metric_input.action]))
-
-@Metric.register_subclass("num_words")
-class NumWordsMetric(Metric):
-
-    def _update(self, metric_input: MetricInput):
-        return mean([len(doc.split()) for doc in metric_input.action])
 
 class MetricLogger:
     def __init__(self, metrics: List[str] = None):

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datasets import set_caching_enabled
 from functools import partial
 from torch import nn
-from transformers import AutoTokenizer, AutoModel, pipeline, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 
 from src.corpora.corpus import Corpus
 from src.utils import parse_args, set_random_seed
@@ -50,9 +50,9 @@ def _map_fn(samples, tokenizer, model, device):
         padding="max_length",
         return_tensors="pt",
     )
-    #inputs["labels"] = inputs["input_ids"]
+    
     inputs = {key: val.to(device) for key, val in inputs.items()}
-    #length = inputs.pop("length")
+    
 
     # Shift so that tokens < n predict n
 
@@ -66,8 +66,6 @@ def _map_fn(samples, tokenizer, model, device):
     loss = loss.reshape([-1, shift_logits.size(1)])  # bsz x words
     lm_score = [lss[:l].sum().cpu().numpy().item() * -1 for lss, l in zip(loss, length)]
     samples["lm_score"] = lm_score
-    #except:
-        #samples = {key: [] for key in samples.keys()}
 
     return samples
 
@@ -133,7 +131,6 @@ def main():
         lambda x: {"text": re.sub(r"^reply: ", "", x["text"])}, batched=False
     )
 
-
     dataset = dataset.map(
         partial(_map_fn, tokenizer=lm_tokenizer, model=lm_model, device=args.device),
         batched=True,
@@ -144,13 +141,6 @@ def main():
     keep_cols = ["embeddings", "text", "lm_score"]
     cols_to_remove = [col for col in dataset.column_names if col not in keep_cols]
     dataset = dataset.remove_columns(cols_to_remove)
-
-    
-    examples = sorted(list(zip(dataset["text"], dataset["lm_score"])), key=lambda x: x[1])
-
-    with open("examples.txt", "w", encoding="utf-8") as f:
-        for r, s in examples:
-            f.write(r.replace("\n", "") + "\t" + str(s) + "\n")
 
     dataset.save_to_disk(args.dataset_save_path)
 

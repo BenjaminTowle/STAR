@@ -1,9 +1,9 @@
 import numpy as np
 import random
 
-from datasets import load_dataset, Dataset, DatasetDict
+from datasets import load_dataset
 from transformers import PreTrainedTokenizerBase
-from typing import Optional, List
+from typing import Optional
 
 from src.corpora.corpus import Corpus
 

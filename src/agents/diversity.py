@@ -1,4 +1,5 @@
 import copy
+import math
 import numpy as np
 import ray
 import torch
@@ -7,11 +8,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from scipy.special import softmax
 from scipy.stats import zscore
-from transformers import pipeline, FeatureExtractionPipeline
-from typing import List, Optional, Union
+from transformers import pipeline
+from typing import Optional
 from tqdm import tqdm
 
-from ..timer import timer
 from ..utils import RegistryMixin, compute_f1_matrix_fast
 from .agent_utils import AgentBatchOutput
 
@@ -124,7 +124,6 @@ class Topic(DiversityStrategy):
 
             topic_outputs = self.roberta(docs_to_query)
 
-             #labels_to_add = topic_outputs.logits.argmax(-1).cpu().numpy().tolist()
             labels_to_add = [s["label"] for s in topic_outputs]
             for idx, label, doc in zip(idxs_to_query, labels_to_add, docs_to_query):
                 labels[idx] = label
@@ -202,7 +201,6 @@ def _rerank(policy_docs, world_docs, world_scores, k, search_fn, tau):
 
     return best_answer, score, idxs
 
-import math
 
 class SimSR(DiversityStrategy):
 
@@ -259,23 +257,6 @@ class SimSR(DiversityStrategy):
             best_answer = [a for b in best_answer for a in b]
             score = [s for s in score for _ in range(len(s))]
             idxs = [i for i in idxs for _ in range(len(i))]
-
-        """
-
-        if ray.is_initialized():
-            scores = [ray.remote(compute_f1_matrix_fast).remote(pd, wd) for pd, wd in zip(policy_docs, world_docs)]
-            scores = ray.get(scores)
-        else:
-            scores = [compute_f1_matrix_fast(pd, wd) for pd, wd in zip(policy_docs, world_docs)]
-
-        probs = [softmax(np.array(s) / self.config.tau) for s in world_scores]
-        scores = [s * np.expand_dims(p, axis=0) for s, p in zip(scores, probs)]
-
-        if not ray.is_initialized():
-            best_answer, score, idxs = zip(*[_search(s, docs, k, self.run_search) for s, docs in zip(scores, policy_docs)])
-        else:
-            results = [ray.remote(_search).remote(s, docs, k, self.run_search) for s, docs in zip(scores, policy_docs)]
-            best_answer, score, idxs = zip(*ray.get(results))"""
         
         return AgentBatchOutput(
             docs=list(best_answer),

@@ -1,10 +1,7 @@
 import torch
-import logging
-
-logger = logging.getLogger(__name__)
 
 
-def asymmetric_loss(X, Y):
+def asymmetric_loss(X: torch.Tensor, Y: torch.Tensor):
     """
     Learn one-directional p(y|x)
     """
@@ -15,7 +12,7 @@ def asymmetric_loss(X, Y):
     return loss.mean()
 
 
-def symmetric_loss(X, Y):
+def symmetric_loss(X: torch.Tensor, Y: torch.Tensor):
     """
     Learns bi-directional p(y|x) and p(x|y)
     """
