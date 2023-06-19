@@ -2,9 +2,9 @@ import numpy as np
 import os
 import random
 
-from datasets import Dataset, DatasetDict
+from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
-from typing import List, Optional, Tuple
+from typing import Optional
 
 from src.corpora.corpus import Corpus
 
@@ -26,10 +26,15 @@ def tokenize(
     max_response_length
 ):
 
-    samples["input_ids"] = tokenizer(
-        samples["messages"], max_length=max_context_length, padding="max_length", truncation=True).input_ids
-    samples["y_input_ids"] = tokenizer(
-        samples["responses"], max_length=max_response_length, padding="max_length", truncation=True).input_ids
+    message_inputs = tokenizer(
+        samples["messages"], max_length=max_context_length, padding="max_length", truncation=True)
+    samples["input_ids"] = message_inputs["input_ids"]
+    samples["attention_mask"] = message_inputs["attention_mask"]
+    
+    reply_inputs = tokenizer(
+        samples["responses"], max_length=max_response_length, padding="max_length", truncation=True)
+    samples["y_input_ids"] = reply_inputs["input_ids"]
+    samples["y_attention_mask"] = reply_inputs["attention_mask"]
 
     if "candidates" in samples:
         cands = np.array(samples["candidates"]).reshape(-1).tolist()
@@ -58,13 +63,17 @@ class RedditCorpus(Corpus):
         max_response_length: int = 64,
         **kwargs
     ):
-        context, responses = zip(*[(l.split("\t")[0], l.split("\t")[1]) for l in open(
+        messages, responses = zip(*[(l.split("\t")[0], l.split("\t")[1]) for l in open(
             os.path.join(data_dir, self.split2files[split]), encoding="utf-8")])
 
         responses = [r.replace("\n", " ") for r in responses]
 
+        # Prefix allows model to distinguish between messages and responses
+        messages = ["message: " + m for m in messages]
+        responses = ["reply: " + r for r in responses]
+
         dataset = Dataset.from_dict({
-            "messages": context,
+            "messages": messages,
             "responses": responses
         })
 

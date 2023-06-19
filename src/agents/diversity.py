@@ -8,14 +8,31 @@ from dataclasses import dataclass
 from scipy.special import softmax
 from scipy.stats import zscore
 from transformers import pipeline, FeatureExtractionPipeline
+from typing import List, Optional, Union
+from tqdm import tqdm
 
 from ..timer import timer
 from ..utils import RegistryMixin, compute_f1_matrix_fast
 from .agent_utils import AgentBatchOutput
 
+@dataclass
+class DiversityConfig:
+    n: int = 3
+    s: int = 3
+    tau: float = 10.0
+    redundancy_penalty: float = 0.1
+    embed_fn: Optional[callable] = None
+    device: str = "cuda"
+
 
 class DiversityStrategy(RegistryMixin, ABC):
     subclasses = {}
+    requires_doc_embeds = False  # Child classes should set this to True if they require doc embeds
+
+    def __init__(self, config: DiversityConfig) -> None:
+        super().__init__()
+        self.config = config
+
     @abstractmethod
     def rerank(self, outputs: AgentBatchOutput, k: int) -> AgentBatchOutput:
         pass
@@ -23,14 +40,17 @@ class DiversityStrategy(RegistryMixin, ABC):
 @DiversityStrategy.register_subclass("mmr")
 class MMR(DiversityStrategy):
 
+    requires_doc_embeds = True
+
     def rerank(
         self, 
         outputs: AgentBatchOutput, 
         k: int
     ):
-        doc_embeds = np.array(outputs.doc_embeds)
+        doc_embeds = torch.tensor(outputs.doc_embeds).to(self.config.device)
         # BNM, BNM -> BNN
-        inter_doc_scores = np.einsum('BNM,BOP -> BNP', doc_embeds, np.transpose(doc_embeds, (0, 2, 1)))
+        inter_doc_scores = torch.bmm(doc_embeds, doc_embeds.transpose(1, 2)).cpu().numpy()
+        #inter_doc_scores = np.einsum('BNM,BOP -> BNP', doc_embeds, np.transpose(doc_embeds, (0, 2, 1)))
         inter_doc_scores = zscore(inter_doc_scores, axis=2)
         doc_scores = np.array(outputs.doc_scores)
         doc_scores = zscore(doc_scores, axis=1)
@@ -61,12 +81,25 @@ class MMR(DiversityStrategy):
 
         return AgentBatchOutput(docs=batch_chosen_docs)
 
+
+
+from datasets import Dataset
+from transformers.pipelines.pt_utils import KeyDataset
+
 @DiversityStrategy.register_subclass("topic")
-@dataclass
 class Topic(DiversityStrategy):
 
-    roberta = pipeline("text-classification", model="cardiffnlp/tweet-topic-21-multi")
-    doc2label = {}   
+    roberta = pipeline("text-classification", model="cardiffnlp/tweet-topic-21-multi", device=0)
+    doc2label = {}
+
+    def precompute(self, dataset: Dataset) -> None:
+        labels = []
+        for doc in tqdm(self.roberta(KeyDataset(dataset, "text"), batch_size=32, truncation=True, padding="max_length", max_length=64), total=len(dataset)):
+            labels.append(doc["label"])
+        texts = dataset["text"]
+
+        for text, label in zip(texts, labels):
+            self.doc2label[text] = label
 
     def rerank(
         self,
@@ -74,126 +107,160 @@ class Topic(DiversityStrategy):
         k: int
     ):
 
-        docs = [outputs.docs[idx] for idx in reversed(np.argsort(outputs.doc_scores).tolist())]
-        
-        labels = [None for _ in docs]
-        idxs_to_query = []
-        docs_to_query = []
-        for i, doc in enumerate(docs):
-            if doc in self.doc2label:
-                labels[i] = self.doc2label[doc]
-            else:
-                idxs_to_query.append(i)
-                docs_to_query.append(doc)
+        batch_docs = []
+        for i in range(len(outputs.docs)):
 
-        outputs = self.roberta(docs_to_query)
+            docs = [outputs.docs[i][idx] for idx in reversed(np.argsort(outputs.doc_scores[i]).tolist())]
+            
+            labels = [None for _ in docs]
+            idxs_to_query = []
+            docs_to_query = []
+            for i, doc in enumerate(docs):
+                if doc in self.doc2label:
+                    labels[i] = self.doc2label[doc]
+                else:
+                    idxs_to_query.append(i)
+                    docs_to_query.append(doc)
 
-        labels_to_add = outputs.logits.argmax(-1).cpu().numpy().tolist()
-        for idx, label, doc in zip(idxs_to_query, labels_to_add, docs_to_query):
-            labels[idx] = label
-            self.doc2label[doc] = label
+            topic_outputs = self.roberta(docs_to_query)
 
-        assert all([l is not None for l in labels])
+             #labels_to_add = topic_outputs.logits.argmax(-1).cpu().numpy().tolist()
+            labels_to_add = [s["label"] for s in topic_outputs]
+            for idx, label, doc in zip(idxs_to_query, labels_to_add, docs_to_query):
+                labels[idx] = label
+                self.doc2label[doc] = label
 
-        chosen_docs = []
-        chosen_labels = []
-        for doc, label in zip(docs, labels):
-            if label not in chosen_labels:
+            assert all([l is not None for l in labels])
+
+            chosen_docs = []
+            chosen_labels = []
+            for doc, label in zip(docs, labels):
+                if label not in chosen_labels:
+                    chosen_docs.append(doc)
+                    chosen_labels.append(label)
+                if len(chosen_docs) == k:
+                    break
+
+            for doc in chosen_docs:
+                if len(chosen_docs) == k:
+                    break
                 chosen_docs.append(doc)
-                chosen_labels.append(label)
-            if len(chosen_docs) == k:
-                break
 
-        for doc in chosen_docs:
-            if len(chosen_docs) == k:
-                break
-            chosen_docs.append(doc)
+            assert len(chosen_docs) == k
 
-        assert len(chosen_docs) == k
+            batch_docs.append(chosen_docs)
 
-        docs = chosen_docs
-
-        return AgentBatchOutput(docs=docs)
+        return AgentBatchOutput(docs=batch_docs)
 
 
 @DiversityStrategy.register_subclass("mcvae")
-@dataclass
 class MCVAE(DiversityStrategy):
- 
-    embed_fn: callable 
-    n: int 
-    s: int 
-    device: str
+
+    requires_doc_embeds = True
     
     def rerank(
         self, 
         outputs: AgentBatchOutput, 
         k: int
     ):
-        embeds = self.embed_fn(
-            torch.tensor(np.array(outputs.query_embed)).to(self.device), num_samples=self.s
-        )
+
+
+        embeds = self.config.embed_fn(
+            torch.tensor(outputs.query_embed).to(self.config.device), num_samples=self.config.s
+        ) # bsz x s x dim
 
         scores = torch.bmm(
-            embeds, torch.tensor(np.array(outputs.doc_embeds)).to(self.device).transpose(2, 1)
+            embeds, torch.tensor(outputs.doc_embeds).to(self.config.device).transpose(1, 2)
         )
 
         batch_docs = []
         for i in range(len(outputs.docs)):
             votes = scores[i].argmax(-1).cpu().numpy().tolist()
-            vote_sums = [(j, votes.count(j)) for j in range(self.n)]
+            vote_sums = [(j, votes.count(j)) for j in range(self.config.n)]
             vote_sums = list(reversed(sorted(vote_sums, key=lambda x: x[1])))[:k]
             vote_idxs, _ = zip(*vote_sums)
-            docs = [outputs.docs[idx] for idx in vote_idxs]
+            docs = [outputs.docs[i][idx] for idx in vote_idxs]
+
             batch_docs.append(docs)
 
         return AgentBatchOutput(docs=batch_docs)
 
 
-class SearcherOutput(list):
-    """
-    Should behave as a list containing the chosen_idxs to ensure
-    compatibility with the rest of the codebase.
-    We also want to track the scores of all the considered idxs.
-    """
+def _search(scores, docs, k, search_fn):
+    idxs = search_fn(scores, k)
+    score = np.mean(np.max(scores[list(idxs)], axis=0), axis=-1).item()
+    best_answer = [docs[idx] for idx in idxs]
 
-    def __init__(self, iterable, scores):
-        super().__init__(iterable)
-        self.scores = scores
+    return best_answer, score, idxs
 
-@dataclass
+
+def _rerank(policy_docs, world_docs, world_scores, k, search_fn, tau):
+    scores = [compute_f1_matrix_fast(pd, wd) for pd, wd in zip(policy_docs, world_docs)]
+    probs = [softmax(np.array(s) / tau) for s in world_scores]
+    scores = [s * np.expand_dims(p, axis=0) for s, p in zip(scores, probs)]
+    best_answer, score, idxs = zip(*[_search(s, docs, k, search_fn) for s, docs in zip(scores, policy_docs)])
+
+    return best_answer, score, idxs
+
+import math
+
 class SimSR(DiversityStrategy):
 
-    n: int = 15
-    s: int = 25
-    tau: float = 10.0
-
     @abstractmethod
-    def run_search(self, scores):
+    def run_search(self, scores, k):
         pass
 
-    def _search(self, scores, docs, searcher):
-        idxs = self.run_search(scores)
-        score = np.mean(np.max(scores[list(idxs)], axis=0), axis=-1).item()
-        best_answer = [docs[idx] for idx in idxs]
-
-        return best_answer, score, idxs
+    @staticmethod
+    def _score_fn(scores):
+        return np.mean(np.max(scores, axis=0), axis=-1).item()
 
     def rerank(self, outputs: AgentBatchOutput, k: int) -> AgentBatchOutput:
         # Check if we have enough documents to rerank
         # must be more than s and more than n to rerank
-        if len(outputs.docs) <= self.s or len(outputs.docs) <= self.n:
+        if len(outputs.docs[0]) < self.config.s or len(outputs.docs[0]) < self.config.n:
             raise ValueError("Not enough documents to rerank")
 
         # Sort outputs
         docs = outputs.docs
-        if self.n != self.s:
+        if self.config.n != self.config.s:
             argsort = np.argsort(np.array(outputs.doc_scores), axis=-1)
             docs = [[outputs.docs[i][idx] for idx in argsort[i]] for i in range(argsort.shape[0])]
                 
-        world_docs = [D[-self.s:] for D in docs]
-        world_scores = [S[-self.s:] for S in outputs.doc_scores]
-        policy_docs = [D[-self.n:] for D in docs]
+        world_docs = [D[-self.config.s:] for D in docs]
+        world_scores = [S[-self.config.s:] for S in outputs.doc_scores]
+        policy_docs = [D[-self.config.n:] for D in docs]
+
+        if not ray.is_initialized():
+            best_answer, score, idxs = _rerank(
+                policy_docs, 
+                world_docs, 
+                world_scores, 
+                k, 
+                self.run_search, 
+                self.config.tau
+            )
+        else:
+            # Get number of workers
+            num_workers = ray.cluster_resources().get("CPU", 1)
+
+            # Chunk through inputs to _rerank
+            chunk_size = math.ceil(len(docs) / num_workers)
+            chunks = [docs[i:i + chunk_size] for i in range(0, len(docs), chunk_size)]
+            chunks = [[c, world_docs[i:i + chunk_size], world_scores[i:i + chunk_size], k, self.run_search, self.config.tau] for i, c in enumerate(chunks)]
+
+            # Run _rerank in parallel
+            results = [ray.remote(_rerank).remote(*c) for c in chunks]
+            results = ray.get(results)
+
+            # Unpack results
+            best_answer, score, idxs = zip(*results)
+
+            # Unchunk results
+            best_answer = [a for b in best_answer for a in b]
+            score = [s for s in score for _ in range(len(s))]
+            idxs = [i for i in idxs for _ in range(len(i))]
+
+        """
 
         if ray.is_initialized():
             scores = [ray.remote(compute_f1_matrix_fast).remote(pd, wd) for pd, wd in zip(policy_docs, world_docs)]
@@ -201,16 +268,14 @@ class SimSR(DiversityStrategy):
         else:
             scores = [compute_f1_matrix_fast(pd, wd) for pd, wd in zip(policy_docs, world_docs)]
 
-        tau = 10.0
-        probs = [softmax(s / tau) for s in world_scores]
+        probs = [softmax(np.array(s) / self.config.tau) for s in world_scores]
         scores = [s * np.expand_dims(p, axis=0) for s, p in zip(scores, probs)]
 
-        with timer.lap("searching"):
-            if not ray.is_initialized():
-                best_answer, score, idxs = zip(*[self._search(s, docs) for s, docs in zip(scores, policy_docs)])
-            else:
-                results = [ray.remote(self._search).remote(s, docs) for s, docs in zip(scores, policy_docs)]
-                best_answer, score, idxs = zip(*ray.get(results))
+        if not ray.is_initialized():
+            best_answer, score, idxs = zip(*[_search(s, docs, k, self.run_search) for s, docs in zip(scores, policy_docs)])
+        else:
+            results = [ray.remote(_search).remote(s, docs, k, self.run_search) for s, docs in zip(scores, policy_docs)]
+            best_answer, score, idxs = zip(*ray.get(results))"""
         
         return AgentBatchOutput(
             docs=list(best_answer),
@@ -224,21 +289,19 @@ class SimSR(DiversityStrategy):
 @DiversityStrategy.register_subclass("sim_sr_greedy")
 class SimSRGreedy(SimSR):
 
-    similarity_penalty: float = 0.05
-
-    def run_search(self, scores):
+    def run_search(self, scores, k):
         idxs = list(range(scores.shape[0]))
         chosen_idxs = []
         all_scores = []
-        for _ in range(self.k):
+        for _ in range(k):
             chosen_idxs, idxs, e_scores = self._get_idxs(scores, idxs, chosen_idxs)
             all_scores.append(e_scores)
 
         # Normalisation
         all_scores = [[np.round(s * 1000, 2) for s in S] for S in all_scores]
-        search_outputs = SearcherOutput(chosen_idxs, all_scores)
+        chosen_idxs
 
-        return search_outputs
+        return chosen_idxs
 
     def _get_idxs(self, scores, idxs, chosen_idxs):
         e_scores = []
@@ -248,8 +311,8 @@ class SimSRGreedy(SimSR):
                 continue
             tmp_idxs = chosen_idxs + [idx]
             S = scores[list(tmp_idxs)]
-            sim_penalty = np.max(scores[chosen_idxs, idx]) if len(chosen_idxs) > 0 else 0.0
-            e_score = self.scorer.score(S) - self.similarity_penalty * sim_penalty
+            red_penalty = np.max(scores[chosen_idxs, idx]) if len(chosen_idxs) > 0 else 0.0
+            e_score = self._score_fn(S) - self.config.redundancy_penalty * red_penalty
             e_scores.append(e_score)
 
         best_idx = idxs[np.argmax(e_scores)]  # Note: this is the idx in idxs, not in scores
@@ -261,10 +324,10 @@ class SimSRGreedy(SimSR):
 @DiversityStrategy.register_subclass("sim_sr_ablative")
 class SimSRAblative(SimSR):
 
-    def run_search(self, scores):
+    def run_search(self, scores, k):
         idxs = list(range(scores.shape[0]))        
 
-        while len(idxs) > self.k:
+        while len(idxs) > k:
             best_score = -1.0
             best_idx = None
             for idx in idxs:
@@ -272,7 +335,7 @@ class SimSRAblative(SimSR):
                 tmp_idxs.remove(idx)
 
                 S = scores[tmp_idxs]
-                e_score = self.scorer.score(S)
+                e_score = self._score_fn(S)
 
                 best_score, best_idx = max([(best_score, best_idx), (e_score, idx)], key=lambda x: x[0])
 
@@ -282,5 +345,85 @@ class SimSRAblative(SimSR):
 
         # Resort idxs by score in descending order
         idxs = [x for _, x in sorted(zip(e_scores, idxs), key=lambda x: x[0], reverse=True)]
+
+        return idxs
+
+import torch.nn.functional as F
+
+@DiversityStrategy.register_subclass("sim_sr_ablative_gpu")
+class SimSRAblativeGPU(SimSR):
+
+    """
+    A GPU-based implementation of ablative search.
+    """
+
+    def rerank(self, outputs: AgentBatchOutput, k: int) -> AgentBatchOutput:
+        # Check if we have enough documents to rerank
+        # must be more than s and more than n to rerank
+        if len(outputs.docs[0]) < self.config.s or len(outputs.docs[0]) < self.config.n:
+            raise ValueError("Not enough documents to rerank")
+
+        # Sort outputs
+        docs = outputs.docs
+        if self.config.n != self.config.s:
+            argsort = np.argsort(np.array(outputs.doc_scores), axis=-1)
+            docs = [[outputs.docs[i][idx] for idx in argsort[i]] for i in range(argsort.shape[0])]
+                
+        world_docs = [D[-self.config.s:] for D in docs]
+        world_scores = [S[-self.config.s:] for S in outputs.doc_scores]
+        policy_docs = [D[-self.config.n:] for D in docs]
+
+        if ray.is_initialized():
+            scores = [ray.remote(compute_f1_matrix_fast).remote(pd, wd) for pd, wd in zip(policy_docs, world_docs)]
+            scores = ray.get(scores)
+        else:
+            scores = [compute_f1_matrix_fast(pd, wd) for pd, wd in zip(policy_docs, world_docs)]
+
+        probs = F.softmax(torch.tensor(world_scores).cuda() / self.config.tau, dim=-1).unsqueeze(1)
+        scores = torch.tensor(np.array(scores)).cuda() * probs
+
+        idxs = self.run_search(scores, k)
+        best_answer = [[policy_docs[i][x] for x in idx] for i, idx in enumerate(idxs)]
+
+        return AgentBatchOutput(
+            docs=best_answer,
+            doc_indices=idxs,
+            topn_doc_indices=[I.tolist() for I in outputs.doc_indices],
+            topn_docs=policy_docs,
+        )
+
+    def run_search(self, scores, k):
+        """
+        scores is 3d tensor of shape (batch size, n, s)
+        """
+        idxs = [list(range(scores.shape[1])) for _ in range(scores.shape[0])]
+
+        scores = scores.unsqueeze(2).cuda().expand(-1, -1, scores.shape[1], -1) 
+
+        # Create a mask
+        mask = torch.ones(scores.size()).cuda()
+        for i in range(scores.shape[1]):
+            mask[:, i, i, :] = 0.0
+
+        best_idx_mask = torch.ones([scores.shape[0], scores.shape[1]]).cuda()
+
+        # We will incrementally add to the mask
+        while len(idxs[0]) > k:
+            # Compute scores
+            S = scores * mask
+            S = S.max(1)[0].mean(-1)
+
+            # The best idx is the one that led to the highest score when it
+            # was removed.
+            best_idxs = torch.argmax(S * best_idx_mask, dim=-1)
+            for i, (best_idx, idx) in enumerate(zip(best_idxs, idxs)):
+                idxs[i].remove(best_idx)
+
+                # Update the masks
+                mask[i, best_idx, :, :] = 0.0
+                best_idx_mask[i, best_idx] = 0.0
+
+        # Check that we have the right number of idxs
+        assert len(idxs[0]) == k
 
         return idxs

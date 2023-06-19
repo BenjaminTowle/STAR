@@ -77,7 +77,6 @@ def get_contexts_persona_responses(f, split, max_turns=1, debug=False, use_past_
         if len(contexts) > 100:
             break
 
-
     return contexts, persona, responses, candidates
 
 @Corpus.register_subclass("personachat")
@@ -105,9 +104,9 @@ class PersonaChatCorpus(Corpus):
         inputs = {}
 
         # Tokenize
-        contexts = [" ".join(C) for C in contexts]
-        persona = ["".join(P) for P in persona]
-        augmented_contexts = [" ".join([p, c]) for p, c in zip(persona, contexts)]
+        contexts = ["[SEP]".join(C) for C in contexts]
+        persona = ["[SEP]".join(P) for P in persona]
+        augmented_contexts = ["[SEP]".join([p, c]) for p, c in zip(persona, contexts)]
         inputs["messages"] = augmented_contexts
         inputs["responses"] = responses
 
@@ -115,12 +114,15 @@ class PersonaChatCorpus(Corpus):
         if tokenizer is None:
             return Dataset.from_dict(inputs)
         
-        input_ids = tokenizer(augmented_contexts, padding="max_length", max_length=max_context_length, truncation=True).input_ids
-        inputs["input_ids"] = input_ids
-        
+        message_inputs = tokenizer(augmented_contexts, padding="max_length", max_length=max_context_length, truncation=True)
+        inputs["input_ids"] = message_inputs.input_ids
+        inputs["attention_mask"] = message_inputs.attention_mask
         
         if split == "train":
-            inputs["y_input_ids"] = tokenizer(responses, padding="max_length", max_length=max_response_length, truncation=True).input_ids
+            reply_inputs = tokenizer(responses, padding="max_length", max_length=max_response_length, truncation=True)
+            inputs["y_input_ids"] = reply_inputs.input_ids
+            inputs["y_attention_mask"] = reply_inputs.attention_mask
+
         else:
             inputs["labels"] = [19 for _ in range(len(contexts))]
 

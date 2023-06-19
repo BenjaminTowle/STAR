@@ -3,7 +3,8 @@ import abc
 from datasets import DatasetDict
 from typing import List
 
-from src.utils import RegistryMixin
+from ..utils import RegistryMixin
+
 
 class Corpus(RegistryMixin, abc.ABC):
 
@@ -21,11 +22,15 @@ class Corpus(RegistryMixin, abc.ABC):
         datasets = {}
         for split in splits:
 
+            tokenizer = kwargs.get("tokenizer", None)
+            max_context_length = kwargs.get("max_context_length", 64)
+            max_response_length = kwargs.get("max_response_length", 64)
+
             dataset = self.get_dataset(
                 split=split, 
-                tokenizer=kwargs["tokenizer"],
-                max_context_length=kwargs["max_context_length"],
-                max_response_length=kwargs["max_response_length"]
+                tokenizer=tokenizer,
+                max_context_length=max_context_length,
+                max_response_length=max_response_length
             )
 
             datasets[split] = dataset

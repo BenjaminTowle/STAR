@@ -4,18 +4,6 @@ from src.modeling import mcvae
 def _get_matching(args):
     return matching.MatchingMixin.create(args.model_name, args.model_path, args.use_symmetric_loss)
 
-def _get_distillation(args):
-    return matching.DistilledMatchingModel.from_pretrained(
-        args.model_path, use_symmetric_loss=args.use_symmetric_loss
-    )
-
-def _get_similarity(args):
-    return matching.DistilBertSimilarityModel.from_pretrained(
-        args.model_path, use_symmetric_loss=args.use_symmetric_loss
-    )
-
-
-
 def _get_mcvae(args):
     return mcvae.DistilBertMCVAE.from_pretrained(
         args.model_path, 
@@ -32,8 +20,6 @@ def get_model(args):
     models = {
         "matching": _get_matching,
         "mcvae": _get_mcvae,
-        "distillation": _get_distillation,
-        "similarity": _get_similarity
     }
 
     return models[args.model_type](args)

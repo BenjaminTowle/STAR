@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from torch import nn
 from typing import Optional
 
-from src.modeling.matching import DistilBertMatchingModel
+from .matching import DistilBertMatchingModel
 
 
 @dataclass
@@ -82,7 +82,7 @@ class DistilBertMCVAE(DistilBertMatchingModel):
         self, 
         config, 
         use_symmetric_loss=False, 
-        z: int = 512,
+        z: int = 256,
         kld_weight: float = 1.0,
         use_kld_annealling: bool = False,
         kld_annealling_steps: int = -1,
@@ -102,9 +102,16 @@ class DistilBertMCVAE(DistilBertMatchingModel):
 
 
     def generate_embedding(self, embeds, num_samples=1):
-        embeds = embeds.expand(num_samples, -1)
-        z = torch.randn_like(embeds)[:, :self.z]
-        embeds = self.cvae.proj(torch.cat([embeds, z], dim=-1))
+        bsz, dim = embeds.size()
+        if bsz == 1:
+            embeds = embeds.expand(num_samples, -1)
+            z = torch.randn_like(embeds)[:, :self.z]
+            embeds = self.cvae.proj(torch.cat([embeds, z], dim=-1))
+        else:
+            z = torch.randn(bsz * num_samples, self.z).to(embeds.device)
+            embeds = embeds.unsqueeze(1).expand(-1, num_samples, -1).reshape(-1, dim)
+            embeds = self.cvae.proj(torch.cat([embeds, z], dim=-1))
+            embeds = embeds.reshape(bsz, num_samples, -1)
         return embeds
 
     def forward(
@@ -122,7 +129,6 @@ class DistilBertMCVAE(DistilBertMatchingModel):
                 y_input_ids=y_input_ids,
                 candidate_input_ids=candidate_input_ids,
                 candidate_embeds=candidate_embeds,
-                labels=labels
             )
 
         cvae_outputs = self.cvae(

@@ -2,14 +2,14 @@
 # TODO: Rewrite simulation engine to deal with message, reply pairs, rather than entire dialogues.
 import logging
 import jsonlines
+import re
 
 from dataclasses import dataclass
-from datasets import Dataset
 from torch.utils.data import DataLoader
 from typing import Optional, List
 
-from src.simulation.metrics import MetricLogger, MetricInput
-from src.corpora.corpus import Corpus
+from .metrics import MetricLogger, MetricInput
+from ..timer import timer
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -64,7 +64,8 @@ class SimulationEngine:
         """
         Run a single batch.
         """
-        batch_outputs = self.agent.batch_act(batch["messages"], k=3)
+        with timer.lap("batch_act", batch_size=len(batch["messages"])):
+            batch_outputs = self.agent.batch_act(batch["messages"])
         batch_action = batch_outputs.docs
     
         for i in range(len(batch["messages"])):
@@ -81,8 +82,12 @@ class SimulationEngine:
             if self.json_write_path is not None:
                 self.write_to_jsonl(episode_result)
 
+            # remove initial 'reply: ' from action and next obs
+            action = [re.sub(r"^reply: ", "", a) for a in batch_action[i]]
+            next_obs = re.sub(r"^reply: ", "", next_obs)
+
             # Update metrics
-            metric_input = MetricInput(reward=reward, action=batch_action[i], target=next_obs)
+            metric_input = MetricInput(reward=reward, action=action, target=next_obs)
             self.metric_logger.update(metric_input)
 
         return episode_results
@@ -94,10 +99,18 @@ class SimulationEngine:
         with jsonlines.open(self.json_write_path, "a") as f:
             f.write(episode_result.to_json())
 
+    def _warmup(self):
+        """
+        Warmup the agent by running a single episode.
+        """
+        batch = next(iter(self.dataloader))
+        self.agent.batch_act(batch["messages"])
+
     def run(self):
         """
         Run simulation for n_episodes.  Each episode consists of a single bandit interaction with the environment.
         """
+        self._warmup()
         episode_results = []
         for i, batch in enumerate(self.dataloader):
             episode_results = self._run_batch(batch, episode_results)

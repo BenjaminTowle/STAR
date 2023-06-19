@@ -5,8 +5,7 @@ from rouge_score import rouge_scorer
 from scipy.stats import ttest_ind
 from statistics import mean
 
-from src.args import parse_args
-from src.utils import normalize_answer, compute_f1
+from src.utils import normalize_answer, compute_f1, parse_args
 
 import nltk
 
@@ -81,8 +80,7 @@ def self_rouge(preds):
     new_targets = []
     for P in preds:
         K = len(P)
-        #if len(P) != 3:
-            #print(P)
+
         for k in range(K):
             new_preds.append(P[:k] + P[k+1:])
             new_targets.append(P[k])

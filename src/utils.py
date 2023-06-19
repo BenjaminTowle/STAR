@@ -4,12 +4,17 @@ import numpy as np
 import re
 import torch
 
-from typing import List, Optional
+from typing import List, Optional, Type
 from collections import Counter
-from transformers import BertTokenizer, GPT2Tokenizer
+from transformers import BertTokenizer, GPT2Tokenizer, HfArgumentParser
 
 # A global dictionary for storing shared data.
 shared_storage = {}
+
+def parse_args(args: Type):
+    parser = HfArgumentParser([args])
+    args, = parser.parse_args_into_dataclasses()
+    return args
 
 
 # https://medium.com/@vadimpushtaev/python-choosing-subclass-cf5b1b67c696

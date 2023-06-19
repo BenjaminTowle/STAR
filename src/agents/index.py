@@ -1,12 +1,10 @@
 import abc
-import copy
 import logging
 import numpy as np
 import torch
 
-from contextlib import contextmanager
 from datasets import Dataset
-from typing import Optional, List
+from typing import Optional
 
 from .agent_utils import AgentBatchOutput
 from ..utils import RegistryMixin
@@ -20,32 +18,31 @@ class Index(RegistryMixin, abc.ABC):
 
     def __init__(
         self, 
-        dataset, 
-        tokenizer, 
-        model, 
+        dataset: Dataset,  
         device="cuda",
-        query_column = "responses",
-        embedding_column = "embeddings",
-        payload_column: Optional[str] = None
+        text_column: str = "text",
+        embeddings_column: str = "embeddings",
     ):
+        self.dataset = dataset
         self.device = device
-        self.tokenizer = tokenizer
-        self.model = model
 
-        self.query_column = query_column
-        self.embedding_column = embedding_column
-        self.payload_column = payload_column if payload_column is not None else query_column
+        # Check columns exist in dataset
+        assert text_column in self.dataset.column_names, \
+            f"Column {text_column} not found in dataset"
+        assert embeddings_column in self.dataset.column_names, \
+            f"Column {embeddings_column} not found in dataset"
 
-        self._index = self.build_index(dataset)
-        self.mask_idxs = None
-
-
-    @abc.abstractmethod
-    def build_index(self, dataset: Dataset):
-        pass
+        self.text_column = text_column
+        self.embeddings_column = embeddings_column
 
     @abc.abstractmethod
-    def search(self, query_embed: torch.Tensor, k: int, lm_bias: bool = True):
+    def search(
+        self, 
+        query_embed: torch.Tensor, 
+        k: int = 3,
+        output_scores: bool = True,
+        output_embeddings: bool = False
+    ):
         pass
 
 
@@ -54,76 +51,85 @@ class InMemoryIndex(Index):
     """
     In-memory index.
     """
-    def __init__(self, *args, lm_bias: bool = False, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.lm_bias = lm_bias
-
-    def _build_index(self, samples):
-        """Map fn"""
-        inputs = self.tokenizer(
-            samples[self.query_column], max_length=32, padding="max_length", truncation=True, return_tensors="pt"
-        )
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        samples[self.embedding_column] = self.model(**inputs).last_hidden_state[:, 0, :].detach().cpu().numpy()
-
-        return samples
-
-    @contextmanager
-    def set_mask_idxs(self, targets_to_mask: List[str]):
-        batch_idxs = []
-        for target in targets_to_mask:
-            sample_idxs = []
-            for i, cand in enumerate(self._index[self.payload_column]):
-                if target == cand:
-                    sample_idxs.append(i)
-            batch_idxs.append(sample_idxs)
-        self.mask_idxs = batch_idxs
-        yield
-        self.mask_idxs = None
-        
-    @torch.no_grad()
-    def build_index(
+    def __init__(
         self, 
-        dataset: Dataset,
+        *args, 
+        lm_bias_column: Optional[str] = None, 
+        lm_bias_alpha: float = 0.5,
+        **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.lm_bias_column = lm_bias_column
+        self.lm_bias_alpha = lm_bias_alpha
+        if lm_bias_column is not None:
+            assert lm_bias_column in self.dataset.column_names, \
+                f"Column {lm_bias_column} not found in dataset"
+            self.lm_bias = torch.tensor(self.dataset[lm_bias_column]).to(self.device) * lm_bias_alpha
+        else:
+            self.lm_bias = None
+        self.embeddings = torch.tensor(self.dataset[self.embeddings_column]).to(self.device)
+        self.texts = self.dataset[self.text_column]
+
+    def find_rank(
+        self, 
+        query_embed: torch.Tensor,
+        text: str,
     ):
 
-        if self.embedding_column not in dataset.column_names:
-            # If no embeddings, must include query to be embedded
-            assert self.query_column in dataset.column_names
-            dataset = dataset.map(self._build_index, batched=True, batch_size=100)
+        """
+        Gets the ranking of a particular text in the index.
+        """
+        scores = torch.matmul(query_embed, self.embeddings.T)
+        if self.lm_bias is not None:
+            scores += self.lm_bias
+        scores = scores.cpu().numpy()
 
-        outputs = dict()
-        outputs[self.embedding_column] = torch.tensor(dataset[self.embedding_column], device=self.device)
-        outputs[self.payload_column] = dataset[self.payload_column]
+        # Sort scores in descending order
+        sorted_idxs = np.argsort(scores, axis=-1)[0][::-1]
 
-        if "lm_score" in dataset.column_names:
-            lm_alpha = 0.5
-            outputs["lm_score"] = (torch.tensor(dataset["lm_score"]) * lm_alpha).to(self.device)
-        else:
-            logger.warn("index does not contain lm_score. This will cause an error later on if lm_bias is set to True.")
+        # Get rank of text
+        rank = np.where(sorted_idxs == self.texts.index(text))[0][0]
 
-        return outputs
+        return rank
 
-    def search(self, query_embed: torch.Tensor, k: int):
+    def get_embedding(self, text: str):
+        """
+        Gets the embedding of a particular text in the index.
+        """
+        idx = self.texts.index(text)
+        return self.embeddings[idx].cpu().numpy()
+
+    def search(self, 
+        query_embed: torch.Tensor, 
+        k: int = 3,
+        output_scores: bool = True,
+        output_embeddings: bool = False
+    ):
         """
         Returns top k responses for a given query embedding.
         Note: np.argpartition is faster than torch.topk
         """
-        scores = torch.matmul(query_embed, self._index[self.embedding_column].T)
-        if self.lm_bias:
-            scores += self._index["lm_score"]
+        scores = torch.matmul(query_embed, self.embeddings.T)
+        if self.lm_bias is not None:
+            scores += self.lm_bias
         scores = scores.cpu().numpy()
-
-        if self.mask_idxs is not None:
-            for i, idxs in enumerate(self.mask_idxs):
-                scores[i, idxs] = -999.
 
         topk = np.argpartition(scores, -k, axis=-1)[:, -k:]
 
+        docs = [[self.texts[idx] for idx in idxs] for idxs in topk]
+
+        doc_embeds = None
+        if output_embeddings:
+            doc_embeds = [[self.embeddings[idx].cpu().numpy() for idx in idxs] for idxs in topk]
+        
+        doc_scores = None
+        if output_scores:
+            doc_scores = [[scores[i, idx] for idx in idxs] for i, idxs in enumerate(topk)]
+
         return AgentBatchOutput(
-            docs=[[self._index[self.payload_column][topk[i, j]] for j in range(topk.shape[1])] for i in range(topk.shape[0])],
-            #doc_embeds=[[self.index[self.embedding_column][topk[i, j]].cpu().numpy() for j in range(topk.shape[1])] for i in range(topk.shape[0])],
-            doc_scores=[np.array([scores[i, topk[i, j]] for j in range(topk.shape[1])]) for i in range(topk.shape[0])],
+            docs=docs,
+            doc_embeds=doc_embeds,
+            doc_scores=doc_scores,
             doc_indices=topk,
         )
 
@@ -131,33 +137,25 @@ class InMemoryIndex(Index):
 @Index.register_subclass("faiss")
 class FAISSIndex(Index):
 
-    def _build_index(self, samples):
-        """Map fn"""
-        inputs = self.tokenizer(
-            samples[self.query_column], max_length=32, padding="max_length", truncation=True, return_tensors="pt"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dataset.add_faiss_index(
+            self.embeddings_column
         )
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        samples[self.embedding_column] = self.model(**inputs).last_hidden_state[:, 0, :].detach().cpu().numpy()
-        return samples
-        
-    @torch.no_grad()
-    def build_index(self, dataset: Dataset):
 
-        if self.embedding_column not in dataset.column_names:
-            # If no embeddings, must include query to be embedded
-            assert self.query_column in dataset.column_names
-            dataset = dataset.map(lambda x: self._build_index(x), batched=True, batch_size=100)
-        dataset.add_faiss_index(column=self.embedding_column)
-        return dataset
-
-    def search(self, query_embed: torch.Tensor, k: int):
+    def search(self, query_embed: torch.Tensor, k: int, output_embeddings: bool = False):
         """
         Returns top k responses for a given query embedding.
         """
         query_embed = query_embed.cpu().numpy()
-        scores, retrieved_examples = self._index.get_nearest_examples_batch(self.embedding_column, query_embed, k=k)
-        docs = [s[self.payload_column] for s in retrieved_examples]
-        doc_embeds = [s[self.embedding_column] for s in retrieved_examples]
+        scores, retrieved_examples = self.dataset.get_nearest_examples_batch(
+            self.embeddings_column, query_embed, k=k
+        )
+        docs = [s[self.text_column] for s in retrieved_examples]
+
+        doc_embeds = None
+        if output_embeddings:
+            doc_embeds = [s[self.embeddings_column] for s in retrieved_examples]
         
         return AgentBatchOutput(
             docs=docs,

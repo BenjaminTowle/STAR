@@ -46,6 +46,10 @@ def map_fn(
         if debug and len(messages) >= 100:
             break
 
+    # Prefix allows model to distinguish between messages and responses
+    messages = ["message: " + m for m in messages]
+    responses = ["reply: " + r for r in responses]
+
     inputs = {
         "messages": messages,
         "responses": responses
@@ -69,7 +73,9 @@ def map_fn(
     )
 
     inputs["input_ids"] = message_inputs["input_ids"]
+    inputs["attention_mask"] = message_inputs["attention_mask"]
     inputs["y_input_ids"] = response_inputs["input_ids"]
+    inputs["y_attention_mask"] = response_inputs["attention_mask"]
 
     return inputs
 
@@ -78,6 +84,12 @@ def map_fn(
 class DailyDialogCorpus(Corpus):
 
     dataset = load_dataset("daily_dialog")
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # Rename the validation split of the dataset to valid
+        self.dataset["valid"] = self.dataset["validation"]
 
     def get_dataset(
         self, split: str, 
@@ -95,20 +107,3 @@ class DailyDialogCorpus(Corpus):
                 lambda x: add_candidates(x, dataset["responses"], tokenizer, **kwargs), batched=True, batch_size=100)
 
         return dataset
-
-    def get_dataset_dict(
-        self, 
-        splits: List[str] = ["train", "test", "validation"],
-        **kwargs
-    ):
-        dataset_dict = DatasetDict()
-
-        for split in splits:
-            dataset_dict[split] = self.get_dataset(split, **kwargs)
-
-        # Rename validation to valid
-        if "validation" in dataset_dict:
-            dataset_dict["valid"] = dataset_dict["validation"]
-            del dataset_dict["validation"]
-
-        return dataset_dict

@@ -49,7 +49,6 @@ class Offline(Corpus):
                 if i >= 100 and debug:
                     break
 
-
         # Tokenize messages and reply sets. Note T5 automatically adds <sos> and <eos> tokens.
         reply_sets = [[reply2id[reply] for reply in reply_set] for reply_set in reply_sets]
         messages_with_prompt = ["relevance: " + str(r) + " diversity: " + str(sr) + " message: " + message for r, sr, message in zip(rge, self_rge, messages)]

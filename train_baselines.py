@@ -14,6 +14,8 @@ from src.corpora.corpus import Corpus
 from src.utils import set_random_seed
 from src.modeling import get_model
 
+from constants import *
+
 os.environ["WANDB_DISABLED"] = "true"
 set_caching_enabled(False)
 
@@ -21,30 +23,36 @@ set_caching_enabled(False)
 class Args:  
     # Training args
     output_dir: str = field(
-        default= "../data/matching-dailydialog",
+        default="prefix-matching-personachat",
         metadata={"help": "Path to save model"}
     )
+    
     data_dir: str = field(
         default="../data/personachat",
         metadata={"help": "Directory that unprocessed datasets are stored in"}
     )
+
     dataset_save_path: str = field(
         default=None,
         metadata={"help": "Path to save dataset"}
     )
+
     dataset_load_path: str = field(
         default=None,
         metadata={"help": "Path to load dataset"}
     )
+
     task: str = field(
-        default="dailydialog", 
-        metadata={"choices": ["personachat", "dailydialog", "simulation", "reddit", "scoring_fn"], 
+        default="personachat", 
+        metadata={"choices": ["personachat", "dailydialog", "reddit", "offline"], 
         "help": "Task to train on"}
     )
+
     model_type: str = field(default="matching", 
-        metadata={"choices": ["matching", "mcvae", "distillation", "similarity"],
+        metadata={"choices": ["matching", "mcvae", "star"],
         "help": "Type of model to train"}
     )
+
     model_name: str = field(default="distilbert",
         metadata={"choices": ["t5", "bert", "distilbert"],
         "help": "Which base model architecture to use."}
@@ -54,6 +62,7 @@ class Args:
         default="distilbert-base-uncased",
         metadata={"help": "Path to pretrained model"}
     )
+
     tokenizer_path: str = field(
         default="distilbert-base-uncased",
         metadata={"help": "Path to pretrained tokenizer"}
@@ -65,7 +74,7 @@ class Args:
     learning_rate: float = 5e-5
     use_symmetric_loss: bool = True
     max_context_length: int = 64
-    max_response_length: int = 64
+    max_response_length: int = 32
     max_turns: int = 1
 
     # MCVAE args
@@ -85,13 +94,9 @@ def parse_args():
     args, = parser.parse_args_into_dataclasses()
     return args
 
-def accuracy_metric(eval_preds):
+def accuracy_metric_matching(eval_preds):
     """Compute recall@k metric for a given set of predictions. Ground truth is assumed to be last index in predictions."""
     acc = (np.argmax(eval_preds.predictions, axis=-1) == (eval_preds.predictions.shape[-1] - 1)).mean().item()
-    # set eval preds.predictions to 1 if greater than 0.5, else 0
-    #eval_preds.predictions[eval_preds.predictions > 0.5] = 1
-    #eval_preds.predictions[eval_preds.predictions <= 0.5] = 0
-    #acc = (eval_preds.predictions == eval_preds.label_ids).mean().item()
 
     return {"accuracy": acc}
 
@@ -145,10 +150,13 @@ def main():
         model=model,
         train_dataset=dataset_dict["train"],
         eval_dataset=dataset_dict["valid"],
-        compute_metrics=accuracy_metric,
+        compute_metrics=accuracy_metric_matching if args.model_type == "matching" else None,
     )
 
     trainer.train()
+
+    # Save model
+    trainer.save_model(args.output_dir)
 
 
 if __name__ == "__main__":

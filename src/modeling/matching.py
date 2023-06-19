@@ -1,6 +1,5 @@
 import abc
 import torch
-import torch.nn.functional as F
 
 from dataclasses import dataclass
 from torch import nn
@@ -11,16 +10,13 @@ from transformers import (
     BertPreTrainedModel, 
     DistilBertModel,
     DistilBertPreTrainedModel,
-    T5Model,
-    T5PreTrainedModel,
-    T5EncoderModel,
+    T5Model
 )
 from typing import Optional
 
-from src.modeling.losses import get_loss_fn
-from src.modeling.utils import get_attention_mask
+from .losses import get_loss_fn
+from .modeling_utils import get_attention_mask
 
-from torch.nn import BatchNorm1d
 
 @dataclass
 class MatchingOutput(SequenceClassifierOutput):
@@ -162,83 +158,3 @@ class T5MatchingModel(MatchingMixin, T5Model):
 
     def get_embedding(self, input_ids: torch.Tensor, attention_mask: torch.Tensor = None) -> torch.Tensor:
         return self.get_encoder()(input_ids, attention_mask=attention_mask).last_hidden_state.mean(1)
-
-
-@MatchingMixin.register_subclass("similarity")
-class DistilBertSimilarityModel(DistilBertMatchingModel):
-    def __init__(self, config: PretrainedConfig, use_symmetric_loss: bool = True):
-        super().__init__(config, use_symmetric_loss)
-        #self.dropout = nn.Dropout(config.seq_classif_dropout)
-        self.classifier = nn.Linear(config.dim, 1)
-
-    def forward(
-        self,
-        input_ids: torch.Tensor,
-        y_input_ids: Optional[torch.Tensor] = None,
-        candidate_input_ids: Optional[torch.Tensor] = None,
-        candidate_embeds: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-    ) -> SequenceClassifierOutput:
-
-        outputs = self.forward_biencoder(
-            input_ids=input_ids,
-            y_input_ids=y_input_ids,
-            candidate_input_ids=candidate_input_ids,
-            candidate_embeds=candidate_embeds,
-        )
-
-        x_embeds = outputs.x_embeds
-        y_embeds = outputs.y_embeds
-
-        #x_embeds = F.relu(x_embeds)
-        #y_embeds = F.relu(y_embeds)
-
-        # Normalise embeds
-        #torchx_embeds = x_embeds / x_embeds.norm(dim=-1, keepdim=True)
-        #torchy_embeds = y_embeds / y_embeds.norm(dim=-1, keepdim=True)
-
-        scores = self.classifier(x_embeds * y_embeds).squeeze(-1)
-
-        loss = None
-        if labels is not None:
-            loss = nn.BCEWithLogitsLoss()(scores, labels.float())  # This includes the sigmoid
-
-        return SequenceClassifierOutput(
-            logits=nn.Sigmoid()(scores),
-            loss=loss
-        )
-
-
-#@MatchingMixin.register_subclass("distillation")
-class DistilledMatchingModel(DistilBertMatchingModel):
-
-    def forward(
-        self,
-        input_ids,
-        z_input_ids,
-        y_input_ids,
-    ):
-
-        # input_ids should comprise 3 positives
-        assert z_input_ids.ndim == 3
-
-        bsz, K, w = z_input_ids.size()
-
-        z_input_ids = z_input_ids.reshape([bsz * 3, w])
-        x_embeds = self.get_embedding(input_ids, attention_mask=get_attention_mask(input_ids))
-        y_embeds = self.get_embedding(y_input_ids, attention_mask=get_attention_mask(y_input_ids))
-        z_embeds = self.get_embedding(z_input_ids, attention_mask=get_attention_mask(z_input_ids))
-        z_embeds = z_embeds.reshape([bsz, 3, -1])
-
-        total_loss = 0
-        for k in range(K):
-            outputs = self.loss_fn(x_embeds, z_embeds[:, k, :])
-            total_loss += outputs.loss
-        outputs.loss = total_loss / K
-
-        #outputs = self.loss_fn(x_embeds, y_embeds)
-        #probs = F.softmax(logits, dim=-1)
-        #kl_loss = (-1 * probs * torch.log_softmax((x_embeds.unsqueeze(1) * z_embeds).sum(-1), dim=-1)).sum(-1).mean()
-        #outputs.loss += kl_loss
-
-        return outputs
