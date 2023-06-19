@@ -1,4 +1,4 @@
-#End-to-End Autoregressive Retrieval for Smart Reply Systems via Bootstrapping
+# End-to-End Autoregressive Retrieval for Smart Reply Systems via Bootstrapping
 
 This is the official code for the EMNLP 2023 submission "End-to-End Autoregressive Retrieval for Smart Reply Systems via
 Bootstrapping".
@@ -37,7 +37,7 @@ python build_reply_set.py --dataset_save_path DATASET \
     --task reddit
 ```
 
-# Inference
+## Inference
 All inference both during bootstrapping and testing phase is performed by the `simulate.py` script. To obtain the bootstrapped dataset, you need to run the following with the `--split` argument both for `train` and `valid`.
 ```
 python simulate.py --agent_type retrieval \
@@ -53,7 +53,7 @@ python simulate.py --agent_type retrieval \
     --batch_size 32
 ```
 
-# Training STAR
+## Training STAR
 We train STAR using the `train_star.py` script, using the json files obtained from the prior inference stage.
 ```
 python train_star.py --output_dir PATH/TO/SAVE/MODEL \
@@ -63,7 +63,7 @@ python train_star.py --output_dir PATH/TO/SAVE/MODEL \
     --tokenizer_type atomic
 ```
 
-# Evaluating STAR
+## Evaluating STAR
 Finally, we can evaluate STAR again using the `simulate.py` script.
 ```
 python simulate.py --agent_type star \
