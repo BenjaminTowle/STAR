@@ -6,7 +6,16 @@ Bootstrapping".
 ![assets/t5v5.png](assets/t5v5.png)
 
 ## Getting started
-The code is designed to run on two datasets: Reddit and PERSONA-CHAT. Reddit can be downloaded from [here](https://github.com/zhangmozhi/mrs). Once downloaded, set the `FILE_PATH` and `SAVE_PATH` in `reddit.py` to the location where the train/test file can be found and where you want to save it respectively. Then run the file `reddit.py`. For PERSONA-CHAT, the data can be downloaded from [here](https://drive.google.com/open?id=1gNyVL5pSMO6DnTIlA9ORNIrd2zm8f3QH).
+The code is designed to run on three datasets: Reddit, PersonaChat and DailyDialog. 
+* Reddit can be downloaded from [here](https://github.com/zhangmozhi/mrs). Once downloaded, set the `FILE_PATH` and `SAVE_PATH` in `reddit.py` to the location where the train/test file can be found and where you want to save it respectively. Then run the file `reddit.py`. 
+* For PersonaChat, the data can be downloaded from [here](https://drive.google.com/open?id=1gNyVL5pSMO6DnTIlA9ORNIrd2zm8f3QH).
+* For DailyDialog, we use a pre-existing dataset from HuggingFace which is automatically downloaded when relevant scripts are run. If you are looking to use additional datasets, we recommend imitating how we process the dataset in `dailydialog.py`.
+
+## Dependencies
+This work was designed for Python 3.8.12. To install relevant dependencies run
+```
+pip install -r requirements.txt
+```
 
 ## Training the Matching model
 To train the underlying Matching model used in the bootstrapping process, run `train.py`:
