@@ -5,9 +5,14 @@ Bootstrapping".
 
 ![assets/t5v5.png](assets/t5v5.png)
 
-## Getting started
+## Repo Overview
+* The various scripts are all contained in the root folder. `constants.py` provides a convenient place to store locations of important files if you want to manually change the defaults in the scripts.
+* The different modules that provide the core functionality are contained in the `src/` folder. `src/agents/` contains the different methods used during inference. `src/corpora/` contains the code to process the datasets. `src/modeling/` contains the models for training. `src/simulation/` contains the engine for running inference.
+* `assets/` contains the relevant images. 
+
+# Setup
 The code is designed to run on three datasets: Reddit, PersonaChat and DailyDialog. 
-* Reddit can be downloaded from [here](https://github.com/zhangmozhi/mrs). Once downloaded, set the `FILE_PATH` and `SAVE_PATH` in `reddit.py` to the location where the train/test file can be found and where you want to save it respectively. Then run the file `reddit.py`. 
+* The original Reddit dataset can be downloaded from [here](https://github.com/zhangmozhi/mrs). We provide the reduced version used in this paper in the `reddit/` folder.  
 * For PersonaChat, the data can be downloaded from [here](https://drive.google.com/open?id=1gNyVL5pSMO6DnTIlA9ORNIrd2zm8f3QH).
 * For DailyDialog, we use a pre-existing dataset from HuggingFace which is automatically downloaded when relevant scripts are run. If you are looking to use additional datasets, we recommend imitating how we process the dataset in `dailydialog.py`.
 
@@ -16,6 +21,9 @@ This work was designed for Python 3.8.12. To install relevant dependencies run
 ```
 pip install -r requirements.txt
 ```
+
+# Running the Experiments
+In this section I summarise the series of scripts that should be run to obtain the final STAR model for a given dataset.
 
 ## Training the Matching model
 To train the underlying Matching model used in the bootstrapping process, run `train.py`:
