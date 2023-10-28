@@ -1,6 +1,5 @@
 import logging
 import os
-import ray
 import pickle
 import torch
 
@@ -25,6 +24,14 @@ from src.utils import set_random_seed, parse_args
 
 from constants import *
 
+# Can run without ray installed
+is_ray_installed = True
+try:
+    import ray
+except ImportError:
+    is_ray_installed = False
+
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -36,20 +43,20 @@ torch.set_grad_enabled(False)
 class Args:
     # Agent args  
     agent_type: str = field(
-        default="star",
+        default="retrieval",
         metadata={"choices": ["star", "seq2seq", "retrieval"],
             "help": "Type of agent to use"}
     )
 
     diversity_strategy: str = field(
-        default="sim_sr_ablative",
+        default="sim_sr_greedy",
         metadata={"choices": [
             "mmr", "topic", "sim_sr_greedy", "sim_sr_ablative", "sim_sr_ablative_gpu", "mcvae"],
             "help": "Reranking strategy."}
     )
 
     model_path: str = field(
-        default="../data/prefix-personachat-star2",
+        default=REDDIT_MATCHING,
         metadata={"help": "Path to pretrained model"}
     )
 
@@ -59,7 +66,7 @@ class Args:
     )
 
     index_path: str = field(
-        default="../data/prefix_personachat_index",
+        default="../data/prefix_reddit_index",
         metadata={"help": "Path to index."}
     )
 
@@ -70,18 +77,18 @@ class Args:
     )
 
     json_write_path: str = field(
-        default=None,
+        default="../data/reddit-train-5.jsonl",
         metadata={"help": "Path to write json file."}
     )
 
     task: str = field(
-        default="personachat", 
+        default="reddit", 
         metadata={"choices": ["personachat", "dailydialog", "reddit"], 
         "help": "Task to train on"}
     )
 
     split: str = field(
-        default="test", 
+        default="train", 
         metadata={"choices": ["train", "valid", "test"], 
         "help": "Which split to use for inference."}
     )
@@ -92,12 +99,12 @@ class Args:
     )
 
     n: int = field(
-        default=15,
+        default=100,
         metadata={"help": "Number of candidates to rerank"}
     )
 
     s: int = field(
-        default=25,
+        default=100,
         metadata={"help": "Number of simulations to run."}
     )
 
@@ -232,10 +239,18 @@ def build_star_agent(args):
     return agent
 
 
+def init_ray(num_cpus, is_ray_installed):
+    if is_ray_installed:
+        ray.init(num_cpus=num_cpus)
+    else:
+        logger.warning(
+            "Ray is not installed, but use_ray was set to True. Using single process."
+        )
+
 def run():
     args = parse_args(Args)
     if args.use_ray:
-        ray.init(num_cpus=args.num_workers)
+        init_ray(args.num_workers, is_ray_installed)
     set_random_seed(args.seed)
 
     if args.agent_type == "retrieval":

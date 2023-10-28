@@ -2,6 +2,7 @@ import jsonlines
 import numpy as np
 import os
 import pickle
+import re
 
 from dataclasses import dataclass, field
 from datasets import Dataset, set_caching_enabled
@@ -33,7 +34,7 @@ logger = logging.get_logger("transformers")
 class Args:
     # Training args
     output_dir: str = field(
-        default= "../data/prefix-personachat-star2",
+        default= "../data/prefix-personachat-star",
         metadata={"help": "Path to save model"}
     )
 

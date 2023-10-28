@@ -1,19 +1,30 @@
 import copy
 import math
 import numpy as np
-import ray
 import torch
+import torch.nn.functional as F
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datasets import Dataset
 from scipy.special import softmax
 from scipy.stats import zscore
 from transformers import pipeline
+from transformers.pipelines.pt_utils import KeyDataset
 from typing import Optional
 from tqdm import tqdm
 
 from ..utils import RegistryMixin, compute_f1_matrix_fast
 from .agent_utils import AgentBatchOutput
+
+
+# Can run without ray installed
+is_ray_installed = True
+try:
+    import ray
+except ImportError:
+    is_ray_installed = False
+
 
 @dataclass
 class DiversityConfig:
@@ -81,10 +92,6 @@ class MMR(DiversityStrategy):
 
         return AgentBatchOutput(docs=batch_chosen_docs)
 
-
-
-from datasets import Dataset
-from transformers.pipelines.pt_utils import KeyDataset
 
 @DiversityStrategy.register_subclass("topic")
 class Topic(DiversityStrategy):
@@ -228,7 +235,7 @@ class SimSR(DiversityStrategy):
         world_scores = [S[-self.config.s:] for S in outputs.doc_scores]
         policy_docs = [D[-self.config.n:] for D in docs]
 
-        if not ray.is_initialized():
+        if not is_ray_installed or not ray.is_initialized():
             best_answer, score, idxs = _rerank(
                 policy_docs, 
                 world_docs, 
@@ -329,7 +336,6 @@ class SimSRAblative(SimSR):
 
         return idxs
 
-import torch.nn.functional as F
 
 @DiversityStrategy.register_subclass("sim_sr_ablative_gpu")
 class SimSRAblativeGPU(SimSR):
@@ -354,11 +360,11 @@ class SimSRAblativeGPU(SimSR):
         world_scores = [S[-self.config.s:] for S in outputs.doc_scores]
         policy_docs = [D[-self.config.n:] for D in docs]
 
-        if ray.is_initialized():
+        if not is_ray_installed or not ray.is_initialized():
+            scores = [compute_f1_matrix_fast(pd, wd) for pd, wd in zip(policy_docs, world_docs)]
+        else:
             scores = [ray.remote(compute_f1_matrix_fast).remote(pd, wd) for pd, wd in zip(policy_docs, world_docs)]
             scores = ray.get(scores)
-        else:
-            scores = [compute_f1_matrix_fast(pd, wd) for pd, wd in zip(policy_docs, world_docs)]
 
         probs = F.softmax(torch.tensor(world_scores).cuda() / self.config.tau, dim=-1).unsqueeze(1)
         scores = torch.tensor(np.array(scores)).cuda() * probs

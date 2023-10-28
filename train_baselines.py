@@ -23,7 +23,7 @@ set_caching_enabled(False)
 class Args:  
     # Training args
     output_dir: str = field(
-        default="prefix-matching-personachat",
+        default="prefix-matching-dailydialog-new",
         metadata={"help": "Path to save model"}
     )
     
@@ -43,7 +43,7 @@ class Args:
     )
 
     task: str = field(
-        default="personachat", 
+        default="dailydialog", 
         metadata={"choices": ["personachat", "dailydialog", "reddit", "offline"], 
         "help": "Task to train on"}
     )

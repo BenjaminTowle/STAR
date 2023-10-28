@@ -18,16 +18,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Args:
-    task: str = "personachat"
-    model_path: str = PERSONACHAT_MCVAE
+    task: str = "dailydialog"
+    model_path: str = "prefix-matching-dailydialog-new\checkpoint-28518"
     tokenizer_path: str = "distilbert-base-uncased"
-    dataset_save_path: str = "../data/prefix_personachat_index"
+    dataset_save_path: str = "../data/prefix_dailydialog_index_new"
 
     max_response_length: int = 32
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     seed: int = 0
 
-    lm_model_path: str = "../data/personachat-lm"
+    lm_model_path: str = "../data/dailydialog-lm"
     lm_tokenizer_path: str = "microsoft/DialoGPT-small"
 
 torch.set_grad_enabled(False)
